@@ -51,6 +51,8 @@ $Description = "Userland endpoint agent for WazabiEDR. Pumps kernel events from 
 $ConfigDir   = Join-Path $env:ProgramData "WazabiEDR"
 $ConfigPath  = Join-Path $ConfigDir "agent.json"
 $SpoolDir    = Join-Path $ConfigDir "spool"
+$InstallRoot = Split-Path -Parent (Split-Path -Parent $AgentExe)  # {app}
+$FwRuleName  = "WazabiEDR Agent — Outbound"
 
 function Write-Step([string]$m) { Write-Host "[*] $m" -ForegroundColor Cyan }
 function Write-Ok  ([string]$m) { Write-Host "[+] $m" -ForegroundColor Green }
@@ -171,7 +173,71 @@ if (Test-Path $ConfigPath) {
     Write-Ok "agent.json written + ACL restricted to Administrators/SYSTEM"
 }
 
-# ---- 4. Start the service --------------------------------------------------
+# ---- 4. Defender exclusions ------------------------------------------------
+# Un EDR qui tourne en SYSTEM avec un driver kernel et un spool sur
+# disque tape sur tous les heuristiques Defender. Sans exclusions, on
+# voit :
+#   - le binaire agent mis en quarantaine au prochain scan ;
+#   - les batches .zst du spool flaggés "suspicious data exfiltration"
+#     parce qu'écrits par un process SYSTEM ;
+#   - le plugin DefenderBridge bloqué par self-protection Defender.
+#
+# Add-MpPreference est idempotent : ré-ajouter une exclusion déjà
+# présente est un no-op silencieux.
+#
+# Try/catch global : si Defender est désactivé (3rd-party AV installé)
+# OU si Tamper Protection est on (par défaut sur Win10 21H2+ avec
+# compte MS — refuse silencieusement les ajouts d'exclusion via API),
+# on continue avec un warning au lieu de fail l'installeur. L'opérateur
+# verra le message et pourra ajouter les exclusions à la main / par GPO.
+Write-Step "Adding Windows Defender exclusions"
+try {
+    Add-MpPreference -ExclusionPath $InstallRoot -ErrorAction Stop
+    Add-MpPreference -ExclusionPath $ConfigDir -ErrorAction Stop
+    Add-MpPreference -ExclusionProcess $AgentExe -ErrorAction Stop
+    Write-Ok "Defender exclusions added: $InstallRoot, $ConfigDir, $($AgentExe | Split-Path -Leaf)"
+} catch {
+    Write-Host "[!] Could not add Defender exclusions: $_" -ForegroundColor Yellow
+    Write-Host "    Likely cause: Tamper Protection is enabled (disable via Windows Security UI or GPO)," -ForegroundColor Yellow
+    Write-Host "    or Defender is replaced by a 3rd-party AV. Add these exclusions manually:" -ForegroundColor Yellow
+    Write-Host "      - Folder: $InstallRoot" -ForegroundColor Yellow
+    Write-Host "      - Folder: $ConfigDir" -ForegroundColor Yellow
+    Write-Host "      - Process: $AgentExe" -ForegroundColor Yellow
+}
+
+# ---- 5. Firewall outbound rule --------------------------------------------
+# L'agent contacte le serveur en sortant (POST /agents/heartbeat,
+# /alerts, /logs). Aucune écoute TCP : les plugins se branchent via
+# named pipe local (\\.\pipe\WazabiEDR_Plugin), pas besoin de règle
+# inbound.
+#
+# Profile=Any : Domain + Private + Public. Si on limitait à Domain,
+# un poste itinérant qui passe sur un wifi public ne checkin plus.
+# Le serveur s'attend justement à recevoir des agents depuis n'importe
+# où (telework). Si une politique entreprise impose Domain only, à
+# durcir par GPO.
+Write-Step "Adding firewall outbound rule for $FwRuleName"
+$existing = Get-NetFirewallRule -DisplayName $FwRuleName -ErrorAction SilentlyContinue
+if ($existing) {
+    Remove-NetFirewallRule -DisplayName $FwRuleName -ErrorAction SilentlyContinue
+}
+try {
+    New-NetFirewallRule `
+        -DisplayName $FwRuleName `
+        -Direction Outbound `
+        -Action Allow `
+        -Program $AgentExe `
+        -Profile Any `
+        -Enabled True `
+        -Description "Allow WazabiEDR agent to contact the central server (heartbeat, ingest, control plane)." `
+        -ErrorAction Stop | Out-Null
+    Write-Ok "Firewall rule '$FwRuleName' added"
+} catch {
+    Write-Host "[!] Could not add firewall rule: $_" -ForegroundColor Yellow
+    Write-Host "    The agent may not be able to reach the server until you add an outbound rule for $AgentExe manually." -ForegroundColor Yellow
+}
+
+# ---- 6. Start the service --------------------------------------------------
 $svc = Get-Service -Name $ServiceName -ErrorAction Stop
 if ($svc.Status -ne "Running") {
     Write-Step "Starting service '$ServiceName'"

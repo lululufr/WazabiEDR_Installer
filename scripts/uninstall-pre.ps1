@@ -28,6 +28,13 @@ $DriverService = "WazabiEDR_Driver"
 $DriverInf     = "WazabiEDR_Driver.inf"
 $HardwareId    = "Root\WazabiEDR_Driver"
 
+# Le script vit dans {app}\scripts\ ; on remonte d'un cran pour
+# retrouver {app} = la racine d'install (Program Files\WazabiEDR).
+$InstallRoot = Split-Path -Parent $PSScriptRoot
+$ConfigDir   = Join-Path $env:ProgramData "WazabiEDR"
+$AgentExe    = Join-Path $InstallRoot "agent\WazabiEDR_Agent.exe"
+$FwRuleName  = "WazabiEDR Agent — Outbound"
+
 function Write-Step([string]$m) { Write-Host "[*] $m" -ForegroundColor Cyan }
 function Write-Ok  ([string]$m) { Write-Host "[+] $m" -ForegroundColor Green }
 function Write-Warn([string]$m) { Write-Host "[!] $m" -ForegroundColor Yellow }
@@ -82,6 +89,25 @@ $oldOemNames = $pnpBlocks |
 foreach ($oem in $oldOemNames) {
     Write-Step "Removing from Driver Store: $oem"
     pnputil /delete-driver $oem /uninstall /force | Out-Null
+}
+
+# ---- 3. Firewall rule -----------------------------------------------------
+$existing = Get-NetFirewallRule -DisplayName $FwRuleName -ErrorAction SilentlyContinue
+if ($existing) {
+    Write-Step "Removing firewall rule '$FwRuleName'"
+    Remove-NetFirewallRule -DisplayName $FwRuleName -ErrorAction SilentlyContinue
+}
+
+# ---- 4. Defender exclusions -----------------------------------------------
+# Remove-MpPreference est aussi silencieux que Add quand la cible
+# n'existe pas. Le try/catch couvre le cas Tamper Protection / Defender
+# absent — symetrique de post-install.ps1.
+try {
+    Remove-MpPreference -ExclusionPath $InstallRoot -ErrorAction SilentlyContinue
+    Remove-MpPreference -ExclusionPath $ConfigDir -ErrorAction SilentlyContinue
+    Remove-MpPreference -ExclusionProcess $AgentExe -ErrorAction SilentlyContinue
+} catch {
+    Write-Warn "Could not clean up Defender exclusions: $_"
 }
 
 Write-Ok "Teardown complete. %ProgramData%\WazabiEDR is preserved."
