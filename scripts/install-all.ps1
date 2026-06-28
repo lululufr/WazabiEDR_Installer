@@ -53,12 +53,13 @@ param(
 
 $ErrorActionPreference = "Continue"
 
-$ConfigDir       = Join-Path $env:ProgramData "WazabiEDR"
-$RebootMarker    = Join-Path $ConfigDir ".reboot-required"
-$StatePath       = Join-Path $ConfigDir ".resume-state.json"
-$ResumeDriverDir = Join-Path $ConfigDir ".resume-driver-pkg"
-$ResumeTaskName  = "WazabiEDR-Resume-Install"
-$LogPath         = Join-Path $ConfigDir "install.log"
+$ConfigDir         = Join-Path $env:ProgramData "WazabiEDR"
+$RebootMarker      = Join-Path $ConfigDir ".reboot-required"
+$StatePath         = Join-Path $ConfigDir ".resume-state.json"
+$ResumeDriverDir   = Join-Path $ConfigDir ".resume-driver-pkg"
+$ResumeTaskName    = "WazabiEDR-Resume-Install"
+$ResumeUITaskName  = "WazabiEDR-Resume-UI"
+$LogPath           = Join-Path $ConfigDir "install.log"
 
 # Redirige stdout + stderr vers un fichier ET la console. Sans ca,
 # quand on tourne depuis Inno Setup [Run] toute la sortie part dans
@@ -150,10 +151,43 @@ function Register-ResumeTask {
         -Force | Out-Null
 }
 
+function Register-ResumeUITask {
+    # Task qui affiche une UI WPF au prochain logon utilisateur. Elle
+    # tail install.log et show le statut des services, en parallele de
+    # la SYSTEM task qui drive l install. Self-clean quand l agent
+    # service est Running.
+    $uiScript = Join-Path (Split-Path -Parent $PSCommandPath) "resume-ui.ps1"
+    if (-not (Test-Path $uiScript)) {
+        # Fallback : chemin canonique de l install
+        $uiScript = "C:\Program Files\WazabiEDR\scripts\resume-ui.ps1"
+    }
+    $taskArgs = @(
+        "-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Normal",
+        "-File", "`"$uiScript`""
+    ) -join " "
+    $action  = New-ScheduledTaskAction -Execute "powershell.exe" -Argument $taskArgs
+    $trigger = New-ScheduledTaskTrigger -AtLogOn
+    # Limited principal : la UI ne lit que install.log et query les
+    # services (read-only). Pas besoin d admin.
+    $principal = New-ScheduledTaskPrincipal -GroupId "BUILTIN\Users" -RunLevel Limited
+    $settings  = New-ScheduledTaskSettingsSet `
+        -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
+        -StartWhenAvailable
+    Unregister-ScheduledTask -TaskName $ResumeUITaskName -Confirm:$false -ErrorAction SilentlyContinue
+    Register-ScheduledTask `
+        -TaskName $ResumeUITaskName `
+        -Action $action -Trigger $trigger `
+        -Principal $principal -Settings $settings `
+        -Description "WazabiEDR resume install UI. Self-removed once the agent service is running." `
+        -Force | Out-Null
+}
+
 function Clear-ResumeState {
-    $task = Get-ScheduledTask -TaskName $ResumeTaskName -ErrorAction SilentlyContinue
-    if ($task) {
-        Unregister-ScheduledTask -TaskName $ResumeTaskName -Confirm:$false -ErrorAction SilentlyContinue
+    foreach ($name in @($ResumeTaskName, $ResumeUITaskName)) {
+        $task = Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue
+        if ($task) {
+            Unregister-ScheduledTask -TaskName $name -Confirm:$false -ErrorAction SilentlyContinue
+        }
     }
     Remove-Item -Force $StatePath -ErrorAction SilentlyContinue
     Remove-Item -Force $RebootMarker -ErrorAction SilentlyContinue
@@ -168,9 +202,10 @@ $driverExit = $LASTEXITCODE
 
 if ($driverExit -eq 3010) {
     Write-Host "[install-all] driver install reports reboot required (3010)" -ForegroundColor Yellow
-    Write-Host "[install-all] staging state and registering resume task" -ForegroundColor Cyan
+    Write-Host "[install-all] staging state and registering resume tasks" -ForegroundColor Cyan
     Save-ResumeState
     Register-ResumeTask
+    Register-ResumeUITask
 
     Write-Host "[install-all] REBOOT in 10 seconds, install will resume automatically" -ForegroundColor Yellow
     Stop-Transcript | Out-Null

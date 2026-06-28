@@ -35,6 +35,7 @@ $ConfigDir       = Join-Path $env:ProgramData "WazabiEDR"
 $AgentExe        = Join-Path $InstallRoot "agent\WazabiEDR_Agent.exe"
 $FwRuleName      = "WazabiEDR Agent — Outbound"
 $ResumeTaskName  = "WazabiEDR-Resume-Install"
+$ResumeUITaskName = "WazabiEDR-Resume-UI"
 $ResumeStatePath = Join-Path $ConfigDir ".resume-state.json"
 $RebootMarker    = Join-Path $ConfigDir ".reboot-required"
 $ResumeDriverDir = Join-Path $ConfigDir ".resume-driver-pkg"
@@ -119,10 +120,12 @@ try {
 # cours (post-reboot pas encore relancé), on retire la task + state
 # pour éviter que l'install ne se relance toute seule au prochain
 # boot vers des binaires qui n'existent plus.
-$task = Get-ScheduledTask -TaskName $ResumeTaskName -ErrorAction SilentlyContinue
-if ($task) {
-    Write-Step "Removing pending resume task '$ResumeTaskName'"
-    Unregister-ScheduledTask -TaskName $ResumeTaskName -Confirm:$false -ErrorAction SilentlyContinue
+foreach ($n in @($ResumeTaskName, $ResumeUITaskName)) {
+    $task = Get-ScheduledTask -TaskName $n -ErrorAction SilentlyContinue
+    if ($task) {
+        Write-Step "Removing pending task '$n'"
+        Unregister-ScheduledTask -TaskName $n -Confirm:$false -ErrorAction SilentlyContinue
+    }
 }
 Remove-Item -Force $ResumeStatePath -ErrorAction SilentlyContinue
 Remove-Item -Force $RebootMarker -ErrorAction SilentlyContinue

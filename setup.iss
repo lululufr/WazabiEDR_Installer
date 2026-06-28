@@ -60,6 +60,7 @@ Source: "payload\utils\wedr-plugin.exe"; \
 Source: "scripts\install-driver.ps1"; DestDir: "{app}\scripts"; Flags: ignoreversion
 Source: "scripts\post-install.ps1";   DestDir: "{app}\scripts"; Flags: ignoreversion
 Source: "scripts\install-all.ps1";    DestDir: "{app}\scripts"; Flags: ignoreversion
+Source: "scripts\resume-ui.ps1";      DestDir: "{app}\scripts"; Flags: ignoreversion
 Source: "scripts\uninstall-pre.ps1";  DestDir: "{app}\scripts"; Flags: ignoreversion
 
 ; Driver package. {tmp} + deleteafterinstall: ~MB of binary the
