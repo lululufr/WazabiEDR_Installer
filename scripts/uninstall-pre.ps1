@@ -30,10 +30,14 @@ $HardwareId    = "Root\WazabiEDR_Driver"
 
 # Le script vit dans {app}\scripts\ ; on remonte d'un cran pour
 # retrouver {app} = la racine d'install (Program Files\WazabiEDR).
-$InstallRoot = Split-Path -Parent $PSScriptRoot
-$ConfigDir   = Join-Path $env:ProgramData "WazabiEDR"
-$AgentExe    = Join-Path $InstallRoot "agent\WazabiEDR_Agent.exe"
-$FwRuleName  = "WazabiEDR Agent — Outbound"
+$InstallRoot     = Split-Path -Parent $PSScriptRoot
+$ConfigDir       = Join-Path $env:ProgramData "WazabiEDR"
+$AgentExe        = Join-Path $InstallRoot "agent\WazabiEDR_Agent.exe"
+$FwRuleName      = "WazabiEDR Agent — Outbound"
+$ResumeTaskName  = "WazabiEDR-Resume-Install"
+$ResumeStatePath = Join-Path $ConfigDir ".resume-state.json"
+$RebootMarker    = Join-Path $ConfigDir ".reboot-required"
+$ResumeDriverDir = Join-Path $ConfigDir ".resume-driver-pkg"
 
 function Write-Step([string]$m) { Write-Host "[*] $m" -ForegroundColor Cyan }
 function Write-Ok  ([string]$m) { Write-Host "[+] $m" -ForegroundColor Green }
@@ -108,6 +112,22 @@ try {
     Remove-MpPreference -ExclusionProcess $AgentExe -ErrorAction SilentlyContinue
 } catch {
     Write-Warn "Could not clean up Defender exclusions: $_"
+}
+
+# ---- 5. Resume state -----------------------------------------------------
+# Si l'opérateur désinstalle alors qu'un cycle reboot/resume est en
+# cours (post-reboot pas encore relancé), on retire la task + state
+# pour éviter que l'install ne se relance toute seule au prochain
+# boot vers des binaires qui n'existent plus.
+$task = Get-ScheduledTask -TaskName $ResumeTaskName -ErrorAction SilentlyContinue
+if ($task) {
+    Write-Step "Removing pending resume task '$ResumeTaskName'"
+    Unregister-ScheduledTask -TaskName $ResumeTaskName -Confirm:$false -ErrorAction SilentlyContinue
+}
+Remove-Item -Force $ResumeStatePath -ErrorAction SilentlyContinue
+Remove-Item -Force $RebootMarker -ErrorAction SilentlyContinue
+if (Test-Path $ResumeDriverDir) {
+    Remove-Item -Recurse -Force $ResumeDriverDir -ErrorAction SilentlyContinue
 }
 
 Write-Ok "Teardown complete. %ProgramData%\WazabiEDR is preserved."
