@@ -75,8 +75,16 @@ Root: HKLM; Subkey: "SYSTEM\CurrentControlSet\Control\Session Manager\Environmen
   Check: NeedsAddPath(ExpandConstant('{app}\bin'))
 
 [Run]
-; Single orchestrator: install-driver then post-install, propagating
-; exit codes (in particular 3010 for "reboot required").
+; Single orchestrator: install-driver then post-install. Le bug
+; historique : install-all.ps1 retourne 3010 quand test signing
+; doit être activé (reboot required), MAIS Inno Setup avale
+; silencieusement ce code et termine setup.exe en exit 0. Le oneliner
+; PowerShell ne voit alors pas le besoin de reboot et affiche "Done"
+; alors que post-install.ps1 n'a jamais tourné.
+; Solution : install-all.ps1 écrit un marker file
+; %ProgramData%\WazabiEDR\.reboot-required avant d'exit 3010 ;
+; le oneliner check ce marker après setup.exe, indépendamment du code
+; renvoyé par Inno.
 Filename: "powershell.exe"; \
   Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\scripts\install-all.ps1"" -PackageDir ""{tmp}\driver"" -AgentExe ""{app}\agent\WazabiEDR_Agent.exe"" -Server ""{code:GetServer}"" -Token ""{code:GetToken}"""; \
   StatusMsg: "Installing driver, configuring agent..."; \
