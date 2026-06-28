@@ -1,41 +1,46 @@
 #Requires -RunAsAdministrator
 <#
 .SYNOPSIS
-    Orchestrate the full WazabiEDR install : driver -> post-install,
+    Orchestrate the full WazabiEDR install : driver then post-install,
     with automatic reboot + resume when test signing or driver swap
     requires a restart.
 
 .DESCRIPTION
-    Première passe (depuis setup.exe Inno Setup) :
-      install-driver.ps1   ── exit 3010 ──┐
-                                          │ stage state + driver pkg
-                                          │ register scheduled task
-                                          │ Restart-Computer -Force
-                                          ▼
-                                   ────[ REBOOT ]────
-                                          │
-                                          ▼
-    Resume au boot (task SYSTEM, AtStartup + 30s) :
-      install-all.ps1 -ResumeFromState
-        ├─ relit state.json (Server, Token, AgentExe, PackageDir staged)
-        ├─ install-driver.ps1 — test signing est ON maintenant, exit 0
-        ├─ post-install.ps1   — service + agent.json + start
-        └─ cleanup : task, state file, driver pkg staged
+    Premiere passe (depuis setup.exe Inno Setup):
+      install-driver.ps1 -- exit 3010 --> stage state + driver pkg
+                                     --> register scheduled task
+                                     --> Restart-Computer -Force
 
-    Le marker file %ProgramData%\WazabiEDR\.reboot-required est
-    encore écrit en parallèle (rétro-compat avec un oneliner serveur
-    qui le checke), mais le reboot lui-même est fait ici — l'opérateur
-    n'a rien à faire entre les deux phases.
+                          (REBOOT)
+
+    Resume au boot (task SYSTEM, AtStartup + 30s):
+      install-all.ps1 -ResumeFromState
+        - relit state.json (Server, Token, AgentExe, PackageDir staged)
+        - install-driver.ps1 -- test signing est ON maintenant, exit 0
+        - post-install.ps1   -- service + agent.json + start
+        - cleanup: task, state file, driver pkg staged
+
+    Le marker file %ProgramData%\WazabiEDR\.reboot-required est aussi
+    ecrit en parallele (retro-compat avec un oneliner serveur qui le
+    checke), mais le reboot lui-meme est fait ici -- l operateur n a
+    rien a faire entre les deux phases.
 
 .PARAMETER PackageDir
 .PARAMETER AgentExe
 .PARAMETER Server
 .PARAMETER Token
-    Args normaux passés par Inno Setup au premier run.
+    Args passes par Inno Setup au premier run.
 
 .PARAMETER ResumeFromState
-    Switch interne — la scheduled task post-reboot passe ce flag.
-    Les autres args sont alors ignorés et lus depuis le state file.
+    Switch interne -- la scheduled task post-reboot passe ce flag.
+    Les autres args sont alors ignores et lus depuis le state file.
+
+.NOTE
+    Tout le code de ce fichier est en pur ASCII : PowerShell 5.1
+    lit les .ps1 en ANSI (cp1252) par defaut, et un caractere UTF-8
+    multi-octets (em dash, accents) declenche un ParserError au
+    chargement -- le script n est meme pas execute. Pas d em dash
+    ni accent dans ce fichier.
 #>
 [CmdletBinding()]
 param(
@@ -55,19 +60,20 @@ $ResumeDriverDir = Join-Path $ConfigDir ".resume-driver-pkg"
 $ResumeTaskName  = "WazabiEDR-Resume-Install"
 $LogPath         = Join-Path $ConfigDir "install.log"
 
-# Redirige stdout + stderr vers un fichier ET la console. Sans ça,
+# Redirige stdout + stderr vers un fichier ET la console. Sans ca,
 # quand on tourne depuis Inno Setup [Run] toute la sortie part dans
-# le néant et on debug à l'aveugle. Le fichier survit aux reboots, on
-# peut donc inspecter le log de la première phase après resume.
+# le neant et on debug a l aveugle. Le fichier survit aux reboots,
+# on peut donc inspecter le log de la premiere phase apres resume.
 if (-not (Test-Path $ConfigDir)) {
     New-Item -ItemType Directory -Force -Path $ConfigDir | Out-Null
 }
-Start-Transcript -Path $LogPath -Append -IncludeInvocationHeader | Out-Null
+Start-Transcript -Path $LogPath -Append | Out-Null
 
 # ---- Mode resume : relit les args depuis le state ------------------------
 if ($ResumeFromState) {
     if (-not (Test-Path $StatePath)) {
-        Write-Host "[install-all] -ResumeFromState set but $StatePath not found — abort" -ForegroundColor Red
+        Write-Host "[install-all] -ResumeFromState set but $StatePath not found, abort" -ForegroundColor Red
+        Stop-Transcript | Out-Null
         exit 1
     }
     $state = Get-Content $StatePath -Raw | ConvertFrom-Json
@@ -79,13 +85,14 @@ if ($ResumeFromState) {
 } else {
     # Premier run normal : args obligatoires.
     if (-not $PackageDir -or -not $AgentExe -or -not $Server -or -not $Token) {
-        Write-Host "[install-all] missing required args (PackageDir, AgentExe, Server, Token)" -ForegroundColor Red
+        Write-Host "[install-all] missing required args" -ForegroundColor Red
+        Stop-Transcript | Out-Null
         exit 1
     }
 }
 
-# Purge un éventuel marker laissé par une exécution précédente. Sera
-# ré-écrit plus bas si install-driver redemande un reboot.
+# Purge un eventuel marker laisse par une execution precedente. Sera
+# re-ecrit plus bas si install-driver redemande un reboot.
 if (Test-Path $RebootMarker) {
     Remove-Item -Force $RebootMarker -ErrorAction SilentlyContinue
 }
@@ -97,8 +104,8 @@ function Save-ResumeState {
         New-Item -ItemType Directory -Force -Path $ConfigDir | Out-Null
     }
     # Stage le PackageDir en local : Inno Setup va supprimer le {tmp}
-    # original avec son flag deleteafterinstall, et au boot suivant il
-    # n'existera plus.
+    # original avec son flag deleteafterinstall, et au boot suivant
+    # il n existera plus.
     if (Test-Path $ResumeDriverDir) {
         Remove-Item -Recurse -Force $ResumeDriverDir -ErrorAction SilentlyContinue
     }
@@ -111,24 +118,23 @@ function Save-ResumeState {
     }
     $json = $obj | ConvertTo-Json
     Set-Content -Path $StatePath -Value $json -Encoding ascii
-    # Marker file consommé en parallèle par le oneliner serveur (rétro-compat).
+    # Marker file consomme en parallele par le oneliner serveur.
     $stamp = (Get-Date).ToString("o")
     Set-Content -Path $RebootMarker -Value "stamped=$stamp" -Encoding ascii
 }
 
 function Register-ResumeTask {
-    # Self-path : on est dans {app}\scripts\install-all.ps1 ; cf. install.iss
+    # Self-path : on est dans {app}\scripts\install-all.ps1.
     $scriptPath = $PSCommandPath
     if (-not $scriptPath -or -not (Test-Path $scriptPath)) {
-        # Fallback : Inno installe systématiquement le script à ce chemin.
         $scriptPath = "C:\Program Files\WazabiEDR\scripts\install-all.ps1"
     }
-    $args = @(
+    $taskArgs = @(
         "-NoProfile", "-ExecutionPolicy", "Bypass",
         "-File", "`"$scriptPath`"", "-ResumeFromState"
     ) -join " "
-    $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument $args
-    # AtStartup + delay 30s : laisse le temps à PnP/SCM/réseau d'être up.
+    $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument $taskArgs
+    # AtStartup + delay 30s : laisse le temps a PnP/SCM/reseau d etre up.
     $trigger = New-ScheduledTaskTrigger -AtStartup
     $trigger.Delay = "PT30S"
     $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -RunLevel Highest
@@ -140,12 +146,11 @@ function Register-ResumeTask {
         -TaskName $ResumeTaskName `
         -Action $action -Trigger $trigger `
         -Principal $principal -Settings $settings `
-        -Description "WazabiEDR: resume install after reboot. Auto-removed on success." `
+        -Description "WazabiEDR resume install after reboot. Auto-removed on success." `
         -Force | Out-Null
 }
 
 function Clear-ResumeState {
-    # Appelé en cas d'install complète (premier run OK, ou resume OK).
     $task = Get-ScheduledTask -TaskName $ResumeTaskName -ErrorAction SilentlyContinue
     if ($task) {
         Unregister-ScheduledTask -TaskName $ResumeTaskName -Confirm:$false -ErrorAction SilentlyContinue
@@ -167,19 +172,21 @@ if ($driverExit -eq 3010) {
     Save-ResumeState
     Register-ResumeTask
 
-    Write-Host "[install-all] REBOOT in 10 seconds — install will resume automatically" -ForegroundColor Yellow
+    Write-Host "[install-all] REBOOT in 10 seconds, install will resume automatically" -ForegroundColor Yellow
+    Stop-Transcript | Out-Null
     Start-Sleep -Seconds 10
-    # Restart-Computer -Force kill tous les processes utilisateurs ; setup.exe
-    # va remonter exit 0 (déjà passé) mais l'opérateur ne verra pas la fin
-    # du oneliner — le post-install se fera au boot suivant via la task.
+    # Restart-Computer -Force kill tous les processes utilisateurs ;
+    # setup.exe va remonter exit 0 (deja passe) mais l operateur ne
+    # verra pas la fin du oneliner -- le post-install se fera au boot
+    # suivant via la task.
     Restart-Computer -Force
-    # Si Restart-Computer return (très rare), on remonte quand même 3010
-    # pour que le oneliner sache.
+    # Si Restart-Computer return (tres rare), on remonte 3010 quand meme.
     exit 3010
 }
 
 if ($driverExit -ne 0) {
-    Write-Host "[install-all] install-driver.ps1 exit code $driverExit -- stopping" -ForegroundColor Yellow
+    Write-Host "[install-all] install-driver.ps1 exit code $driverExit, stopping" -ForegroundColor Yellow
+    Stop-Transcript | Out-Null
     exit $driverExit
 }
 
@@ -188,6 +195,7 @@ if ($driverExit -ne 0) {
 $postExit = $LASTEXITCODE
 
 if ($postExit -ne 0) {
+    Stop-Transcript | Out-Null
     exit $postExit
 }
 
