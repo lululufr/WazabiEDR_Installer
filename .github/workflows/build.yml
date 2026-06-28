@@ -63,18 +63,58 @@ jobs:
             throw 'ISCC.exe not found after choco install'
           }
 
-      # ---- Download sibling release assets --------------------------------
-      # The sibling repos (Driver, Agent, Utils) are PRIVATE — the
-      # workflow's automatic GITHUB_TOKEN is scoped to THIS repo only
-      # and cannot read them. Required setup once :
+      # ---- Wait for sibling release assets --------------------------------
+      # Race condition historique : tag v0.1.x est pushé sur les 4 repos
+      # en (quasi-)parallèle. Quand le workflow Installer démarre, le
+      # workflow Driver peut être encore en cours (~20 min de build WDK).
+      # gh release download retourne "release not found" et le job foire.
+      # On poll les 3 sibling releases jusqu'à ce que l'asset attendu
+      # soit publié — timeout global 30 min (large pour le driver).
       #
-      #   1. Create a Fine-grained PAT scoped to the four sibling
-      #      repos with permission `Contents: Read`.
-      #   2. Add it as repo secret `GH_RELEASES_PAT` on
-      #      WazabiEDR_Installer.
-      #
-      # The fallback to GITHUB_TOKEN below is for the day the siblings
-      # ever go public — no PAT needed.
+      # Les 4 repos sont publics : GITHUB_TOKEN du workflow suffit pour
+      # lire les releases. Set GH_RELEASES_PAT s'ils repassent en privé
+      # un jour.
+
+      - name: Wait for sibling releases
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GH_RELEASES_PAT || secrets.GITHUB_TOKEN }}
+        run: |
+          $tag     = '${{ steps.meta.outputs.tag }}'
+          $version = '${{ steps.meta.outputs.version }}'
+          $owner   = '${{ github.repository_owner }}'
+
+          $expected = @(
+            @{ Repo = "$owner/WazabiEDR_Driver"; Asset = 'WazabiEDR_Driver.zip' },
+            @{ Repo = "$owner/WazabiEDR_Agent";  Asset = "wazabi-agent-$version-windows-x86_64.zip" },
+            @{ Repo = "$owner/WazabiEDR_Utils";  Asset = "wazabi-utils-$version-windows-x86_64.zip" }
+          )
+
+          $maxWaitSec   = 1800   # 30 min — driver build ~20 min en pire cas
+          $pollInterval = 30
+          $start        = Get-Date
+
+          foreach ($e in $expected) {
+            Write-Host "Waiting for $($e.Repo) $tag asset $($e.Asset)..."
+            while ($true) {
+              # gh api retourne 404 si la release ou l'asset n'existe pas
+              # encore. On capture la sortie + $LASTEXITCODE pour distinguer
+              # "pas encore prêt" (poll de nouveau) de "vrai 5xx" (laisse
+              # remonter au retry suivant — c'est juste plus long).
+              $names = gh api "repos/$($e.Repo)/releases/tags/$tag" --jq '.assets[].name' 2>$null
+              if ($LASTEXITCODE -eq 0 -and ($names -split "`n") -contains $e.Asset) {
+                Write-Host "  $($e.Repo) $tag: $($e.Asset) ready"
+                break
+              }
+              $elapsed = ((Get-Date) - $start).TotalSeconds
+              if ($elapsed -ge $maxWaitSec) {
+                throw "Timeout after $maxWaitSec s waiting for $($e.Repo) $tag asset $($e.Asset)"
+              }
+              Write-Host "  ...not ready yet (elapsed $([int]$elapsed)s), retry in ${pollInterval}s"
+              Start-Sleep -Seconds $pollInterval
+            }
+          }
+          Write-Host "All sibling assets ready."
 
       - name: Download driver package
         shell: pwsh
