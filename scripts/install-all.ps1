@@ -226,12 +226,32 @@ if ($driverExit -ne 0) {
 }
 
 # ---- 2. Agent service + config + start -----------------------------------
+# Capture $LASTEXITCODE AVANT le call pour pouvoir detecter si
+# post-install n a meme pas tourne (ParserError ou autre erreur de
+# chargement) : dans ce cas $LASTEXITCODE reste a 0 (succes de
+# install-driver precedent) et on annonce un faux succes. On veut
+# detecter ce cas via le check du service Agent juste apres.
+$LASTEXITCODE = 0
 & "$PSScriptRoot\post-install.ps1" -AgentExe $AgentExe -Server $Server -Token $Token
 $postExit = $LASTEXITCODE
 
 if ($postExit -ne 0) {
+    Write-Host "[install-all] post-install.ps1 exit code $postExit, stopping" -ForegroundColor Red
     Stop-Transcript | Out-Null
     exit $postExit
+}
+
+# Defensive check : meme avec exit code 0, si post-install n a pas
+# tourne (ParserError silencieux sur ANSI codepage), le service Agent
+# n est jamais cree. On verifie l effet attendu avant d annoncer
+# succes a la UI / au caller.
+Start-Sleep -Seconds 1
+$agentSvc = Get-Service -Name "WazabiEDR_Agent" -ErrorAction SilentlyContinue
+if (-not $agentSvc) {
+    Write-Host "[install-all] post-install.ps1 returned 0 but service WazabiEDR_Agent was not created" -ForegroundColor Red
+    Write-Host "[install-all] probable silent ParserError in post-install.ps1, check the transcript above" -ForegroundColor Red
+    Stop-Transcript | Out-Null
+    exit 2
 }
 
 # ---- 3. Cleanup resume state (si on en avait) ----------------------------
