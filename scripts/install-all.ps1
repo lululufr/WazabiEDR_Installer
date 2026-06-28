@@ -53,6 +53,16 @@ $RebootMarker    = Join-Path $ConfigDir ".reboot-required"
 $StatePath       = Join-Path $ConfigDir ".resume-state.json"
 $ResumeDriverDir = Join-Path $ConfigDir ".resume-driver-pkg"
 $ResumeTaskName  = "WazabiEDR-Resume-Install"
+$LogPath         = Join-Path $ConfigDir "install.log"
+
+# Redirige stdout + stderr vers un fichier ET la console. Sans ça,
+# quand on tourne depuis Inno Setup [Run] toute la sortie part dans
+# le néant et on debug à l'aveugle. Le fichier survit aux reboots, on
+# peut donc inspecter le log de la première phase après resume.
+if (-not (Test-Path $ConfigDir)) {
+    New-Item -ItemType Directory -Force -Path $ConfigDir | Out-Null
+}
+Start-Transcript -Path $LogPath -Append -IncludeInvocationHeader | Out-Null
 
 # ---- Mode resume : relit les args depuis le state ------------------------
 if ($ResumeFromState) {
@@ -184,4 +194,5 @@ if ($postExit -ne 0) {
 # ---- 3. Cleanup resume state (si on en avait) ----------------------------
 Clear-ResumeState
 Write-Host "[install-all] install complete" -ForegroundColor Green
+Stop-Transcript | Out-Null
 exit 0

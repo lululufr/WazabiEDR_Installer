@@ -74,20 +74,31 @@ if (-not $tsEnabled) {
 Write-Ok "Test signing active"
 
 # ---- 3. Locate devcon.exe --------------------------------------------------
+# Sur les endpoints le WDK n'est PAS installé. Le workflow CI Driver
+# embarque devcon.exe dans le package (cf. WazabiEDR_Driver workflow
+# "Bundle devcon.exe"), donc on le cherche d'abord là. Fallback sur le
+# WDK local pour les builds dev où l'opérateur a le WDK installé.
 $arch = if ([Environment]::Is64BitOperatingSystem) {
     if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") { "arm64" } else { "x64" }
 } else { "x86" }
 
-$devcon = Get-ChildItem -Path "C:\Program Files (x86)\Windows Kits\10\Tools" `
-    -Filter "devcon.exe" -Recurse -ErrorAction SilentlyContinue |
-    Where-Object { $_.FullName -match "\\$arch\\" } |
-    Sort-Object FullName -Descending |
-    Select-Object -First 1 -ExpandProperty FullName
+$devcon = $null
+$embedded = Join-Path $PackageDir "devcon.exe"
+if (Test-Path $embedded) {
+    $devcon = $embedded
+    Write-Ok "devcon (embedded): $devcon"
+} else {
+    $devcon = Get-ChildItem -Path "C:\Program Files (x86)\Windows Kits\10\Tools" `
+        -Filter "devcon.exe" -Recurse -ErrorAction SilentlyContinue |
+        Where-Object { $_.FullName -match "\\$arch\\" } |
+        Sort-Object FullName -Descending |
+        Select-Object -First 1 -ExpandProperty FullName
 
-if (-not $devcon) {
-    Fail 1 "devcon.exe ($arch) not found. Install the Windows Driver Kit (WDK)."
+    if (-not $devcon) {
+        Fail 1 "devcon.exe ($arch) not found. The installer should embed it (cf. WazabiEDR_Driver CI), or install the WDK locally for dev."
+    }
+    Write-Ok "devcon (WDK): $devcon"
 }
-Write-Ok "devcon: $devcon"
 
 # ---- 4. Detect and remove any prior install --------------------------------
 $svc = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
