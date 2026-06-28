@@ -103,7 +103,7 @@ jobs:
               # remonter au retry suivant — c'est juste plus long).
               $names = gh api "repos/$($e.Repo)/releases/tags/$tag" --jq '.assets[].name' 2>$null
               if ($LASTEXITCODE -eq 0 -and ($names -split "`n") -contains $e.Asset) {
-                Write-Host "  $($e.Repo) $tag: $($e.Asset) ready"
+                Write-Host "  $($e.Repo) ${tag}: $($e.Asset) ready"
                 break
               }
               $elapsed = ((Get-Date) - $start).TotalSeconds
