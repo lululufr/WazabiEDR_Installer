@@ -1,0 +1,11 @@
+# CI populates this from sibling repo releases; never checked in.
+payload/
+
+# Inno Setup build output.
+out/
+*.exe
+
+# Editor cruft.
+*.swp
+.vs/
+.vscode/

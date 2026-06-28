@@ -1,0 +1,177 @@
+# WazabiEDR installer build.
+#
+# Trigger: push a tag vX.Y.Z to this repo. The job will:
+#   1. Download the matching vX.Y.Z release assets from the three
+#      sibling repos (driver, agent, utils).
+#   2. Lay them out under payload/.
+#   3. Run ISCC.exe to compile WazabiEDR_Setup_X.Y.Z.exe.
+#   4. Publish it as a GitHub release on THIS repo.
+#
+# Sibling repos must have a release tagged with the same vX.Y.Z
+# before this workflow runs -- the asset download will fail
+# otherwise. Use workflow_dispatch for dry runs (no release upload,
+# artefact only).
+#
+# Cross-repo download: by default uses GITHUB_TOKEN, which can only
+# read PUBLIC repos. If the sibling repos are private, configure a
+# Fine-grained PAT with contents:read on all four repos and store it
+# as secret GH_RELEASES_PAT.
+
+name: build-installer
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to bundle (without the v prefix)'
+        required: true
+        default: '0.1.0'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: meta
+        shell: pwsh
+        run: |
+          if ('${{ github.event_name }}' -eq 'workflow_dispatch') {
+            $version = '${{ inputs.version }}'
+          } else {
+            $version = '${{ github.ref_name }}'.TrimStart('v')
+          }
+          $tag = "v$version"
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "tag=$tag"         | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          Write-Host "version=$version tag=$tag"
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: |
+          # Chocolatey is pre-installed on windows-latest runners.
+          choco install innosetup --no-progress -y
+          if (-not (Test-Path 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe')) {
+            throw 'ISCC.exe not found after choco install'
+          }
+
+      # ---- Download sibling release assets --------------------------------
+      # All three downloads share the same auth and tag. The driver
+      # asset is named WazabiEDR_Driver.zip (legacy from its workflow);
+      # agent + utils use the unified wazabi-<comp>-<ver>-<triple>.zip
+      # convention introduced with the installer.
+
+      - name: Download driver package
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GH_RELEASES_PAT || secrets.GITHUB_TOKEN }}
+        run: |
+          $tag    = '${{ steps.meta.outputs.tag }}'
+          $owner  = '${{ github.repository_owner }}'
+          $repo   = "$owner/WazabiEDR_Driver"
+          New-Item -ItemType Directory -Force -Path payload\driver | Out-Null
+          gh release download $tag --repo $repo --pattern 'WazabiEDR_Driver.zip' --dir payload\driver
+          if ($LASTEXITCODE -ne 0) { throw "gh release download $repo $tag failed" }
+          Expand-Archive -Path payload\driver\WazabiEDR_Driver.zip -DestinationPath payload\driver -Force
+          Remove-Item payload\driver\WazabiEDR_Driver.zip
+          Write-Host "Driver payload:"
+          Get-ChildItem payload\driver | Format-Table Name, Length
+
+      - name: Download agent
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GH_RELEASES_PAT || secrets.GITHUB_TOKEN }}
+        run: |
+          $tag     = '${{ steps.meta.outputs.tag }}'
+          $version = '${{ steps.meta.outputs.version }}'
+          $owner   = '${{ github.repository_owner }}'
+          $repo    = "$owner/WazabiEDR_Agent"
+          $asset   = "wazabi-agent-$version-windows-x86_64.zip"
+          New-Item -ItemType Directory -Force -Path payload\agent | Out-Null
+          gh release download $tag --repo $repo --pattern $asset --dir payload\agent
+          if ($LASTEXITCODE -ne 0) { throw "gh release download $repo $tag failed" }
+          Expand-Archive -Path "payload\agent\$asset" -DestinationPath payload\agent -Force
+          Remove-Item "payload\agent\$asset"
+          if (-not (Test-Path 'payload\agent\WazabiEDR_Agent.exe')) {
+            throw 'WazabiEDR_Agent.exe missing from agent release zip'
+          }
+
+      - name: Download utils
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GH_RELEASES_PAT || secrets.GITHUB_TOKEN }}
+        run: |
+          $tag     = '${{ steps.meta.outputs.tag }}'
+          $version = '${{ steps.meta.outputs.version }}'
+          $owner   = '${{ github.repository_owner }}'
+          $repo    = "$owner/WazabiEDR_Utils"
+          $asset   = "wazabi-utils-$version-windows-x86_64.zip"
+          New-Item -ItemType Directory -Force -Path payload\utils | Out-Null
+          gh release download $tag --repo $repo --pattern $asset --dir payload\utils
+          if ($LASTEXITCODE -ne 0) { throw "gh release download $repo $tag failed" }
+          Expand-Archive -Path "payload\utils\$asset" -DestinationPath payload\utils -Force
+          Remove-Item "payload\utils\$asset"
+          if (-not (Test-Path 'payload\utils\wedr-plugin.exe')) {
+            throw 'wedr-plugin.exe missing from utils release zip'
+          }
+
+      # ---- Build setup.exe ------------------------------------------------
+      - name: Compile setup.iss
+        shell: pwsh
+        run: |
+          $version = '${{ steps.meta.outputs.version }}'
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "/DAppVersion=$version" setup.iss
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed (exit $LASTEXITCODE)" }
+          $out = "out\WazabiEDR_Setup_$version.exe"
+          if (-not (Test-Path $out)) { throw "Expected $out not produced" }
+          $size = (Get-Item $out).Length
+          Write-Host "Built $out ($size bytes)"
+
+      - name: Compute SHA256 of the setup
+        id: hash
+        shell: pwsh
+        run: |
+          $version = '${{ steps.meta.outputs.version }}'
+          $out = "out\WazabiEDR_Setup_$version.exe"
+          $sha = (Get-FileHash -Algorithm SHA256 -Path $out).Hash.ToLower()
+          "sha256=$sha" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          Set-Content -Path "out\SHA256SUMS" -Value "$sha  WazabiEDR_Setup_$version.exe" -Encoding ascii
+
+      # ---- Publish --------------------------------------------------------
+      - name: Create release
+        if: github.event_name == 'push'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            out/WazabiEDR_Setup_${{ steps.meta.outputs.version }}.exe
+            out/SHA256SUMS
+          fail_on_unmatched_files: true
+          generate_release_notes: true
+          body: |
+            WazabiEDR ${{ steps.meta.outputs.tag }} — bundled installer.
+
+            **SHA-256:** `${{ steps.hash.outputs.sha256 }}`
+
+            ## Install (silent)
+            ```powershell
+            .\WazabiEDR_Setup_${{ steps.meta.outputs.version }}.exe /SILENT /SERVER=<url> /TOKEN=<enrollment_token>
+            ```
+
+            See WazabiEDR_Installer/README.md for the full usage notes.
+
+      - name: Upload artefact (workflow_dispatch)
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: WazabiEDR_Setup_${{ steps.meta.outputs.version }}
+          path: |
+            out/WazabiEDR_Setup_${{ steps.meta.outputs.version }}.exe
+            out/SHA256SUMS

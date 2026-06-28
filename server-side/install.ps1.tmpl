@@ -1,0 +1,98 @@
+# WazabiEDR endpoint bootstrap script.
+#
+# This file is a TEMPLATE. The server side (control-plane / web
+# console) should render it for each download request, substituting:
+#
+#   {{SERVER_URL}}         e.g. http://wazabi.example.com:8080
+#                          (the server listens on 8080 by default;
+#                          switch to https:// once TLS is wired up)
+#   {{ENROLLMENT_TOKEN}}   single-use JWT minted by the server
+#   {{INSTALLER_URL}}      direct download URL of WazabiEDR_Setup_X.Y.Z.exe
+#   {{INSTALLER_SHA256}}   SHA-256 of the bundled installer (defence
+#                          in depth: refuses to run a tampered EXE)
+#
+# Typical operator flow:
+#
+#   iwr http://wazabi.example.com:8080/install.ps1 -UseBasicParsing | iex
+#
+# The operator must be running an elevated PowerShell session
+# (Administrator). The script self-checks and bails out otherwise
+# rather than triggering a UAC prompt mid-pipeline.
+
+#Requires -RunAsAdministrator
+
+Set-StrictMode -Version Latest
+$ErrorActionPreference = "Stop"
+
+$ServerUrl       = '{{SERVER_URL}}'
+$EnrollmentToken = '{{ENROLLMENT_TOKEN}}'
+$InstallerUrl    = '{{INSTALLER_URL}}'
+$InstallerSha256 = '{{INSTALLER_SHA256}}'
+
+function Write-Step([string]$m) { Write-Host "[*] $m" -ForegroundColor Cyan }
+function Write-Ok  ([string]$m) { Write-Host "[+] $m" -ForegroundColor Green }
+function Fail([string]$m) {
+    Write-Host "[-] $m" -ForegroundColor Red
+    exit 1
+}
+
+# ---- Pre-flight ---------------------------------------------------------
+if (-not ([System.Environment]::Is64BitOperatingSystem)) {
+    Fail "WazabiEDR requires a 64-bit version of Windows."
+}
+$ver = [System.Environment]::OSVersion.Version
+if ($ver.Major -lt 10) {
+    Fail "WazabiEDR requires Windows 10 or later (detected $ver)."
+}
+if (Get-Service -Name 'WazabiEDR_Agent' -ErrorAction SilentlyContinue) {
+    Write-Step "WazabiEDR_Agent service already present -- re-running setup will upgrade in place."
+}
+
+# ---- Download ------------------------------------------------------------
+$dest = Join-Path $env:TEMP "WazabiEDR_Setup.exe"
+Write-Step "Downloading installer from $InstallerUrl"
+try {
+    Invoke-WebRequest -Uri $InstallerUrl -OutFile $dest -UseBasicParsing
+} catch {
+    Fail "Download failed: $_"
+}
+Write-Ok "Downloaded to $dest"
+
+# ---- Verify integrity ---------------------------------------------------
+$actual = (Get-FileHash -Algorithm SHA256 -Path $dest).Hash.ToLower()
+$expected = $InstallerSha256.ToLower()
+if ($actual -ne $expected) {
+    Remove-Item -Force $dest -ErrorAction SilentlyContinue
+    Fail "SHA-256 mismatch: expected $expected, got $actual. Refusing to run."
+}
+Write-Ok "SHA-256 verified: $actual"
+
+# ---- Run silent install -------------------------------------------------
+# /SILENT  : no UI past the Welcome page (only progress).
+# /SP-     : skip the "Ready to install" prompt.
+# /NORESTART : we'll handle the reboot decision ourselves below.
+Write-Step "Running installer (silent)"
+$proc = Start-Process -FilePath $dest -ArgumentList @(
+    '/SILENT'
+    '/SP-'
+    '/NORESTART'
+    "/SERVER=$ServerUrl"
+    "/TOKEN=$EnrollmentToken"
+) -Wait -PassThru
+
+$exit = $proc.ExitCode
+Remove-Item -Force $dest -ErrorAction SilentlyContinue
+
+switch ($exit) {
+    0 {
+        Write-Ok "WazabiEDR installed. Agent service started -- auto-enrolling against $ServerUrl now."
+    }
+    3010 {
+        Write-Host "[!] Installer reports REBOOT REQUIRED (test signing or driver swap)." -ForegroundColor Yellow
+        Write-Host "    Reboot the machine, then re-run the same one-liner to finish setup." -ForegroundColor Yellow
+        exit 3010
+    }
+    default {
+        Fail "Installer failed with exit code $exit. Inspect %TEMP%\Setup Log*.txt for details."
+    }
+}
