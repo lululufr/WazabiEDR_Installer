@@ -28,6 +28,7 @@ AppId={{#AppId}
 AppName={#AppNameStr}
 AppVersion={#AppVersion}
 AppPublisher=WazabiEDR
+AppPublisherURL=https://github.com/lululufr
 DefaultDirName={autopf}\WazabiEDR
 DefaultGroupName=WazabiEDR
 DisableProgramGroupPage=yes
@@ -44,8 +45,70 @@ ChangesEnvironment=yes
 RestartIfNeededByRun=yes
 CloseApplications=no
 SetupLogging=yes
-; Allow the silent CLI to override the install dir if needed.
 UsePreviousAppDir=yes
+; Identite visuelle alignee sur le front (cf. assets/, palette frontend/src/index.css)
+SetupIconFile=assets\wazabi.ico
+UninstallDisplayIcon={app}\bin\wedr-plugin.exe
+WizardImageFile=assets\wazabi-large.bmp
+WizardSmallImageFile=assets\wazabi-small.bmp
+WizardImageStretch=no
+WizardImageAlphaFormat=defined
+; Fond d ecran derriere le wizard (effet "blackout") avec degrade dark
+WindowVisible=yes
+WindowShowCaption=no
+WindowStartMaximized=yes
+WindowResizable=no
+; BGR (Pascal) : $00BBGGRR. #0b0e07 -> $00070e0b ; #14180e -> $000e1814.
+BackColor=$00070e0b
+BackColor2=$000e1814
+BackColorDirection=lefttoright
+DisableWelcomePage=no
+DisableReadyPage=no
+DisableFinishedPage=no
+ShowLanguageDialog=no
+
+[Languages]
+; Inno Setup embarque French.isl par defaut depuis la v6 ; ordre = ordre dans
+; la dropdown si ShowLanguageDialog=yes (ici off, mais on garde EN en fallback).
+Name: "fr"; MessagesFile: "compiler:Languages\French.isl"
+Name: "en"; MessagesFile: "compiler:Default.isl"
+
+[Messages]
+; Override des messages cles pour coller au ton de la console (court, direct).
+fr.SetupAppTitle=Installation de {#AppNameStr}
+fr.SetupWindowTitle=Installation de {#AppNameStr} — version {#AppVersion}
+fr.WelcomeLabel1=Installer l agent {#AppNameStr}
+fr.WelcomeLabel2=Cette installation depose le driver kernel, le service agent et l outil wedr-plugin sur ce poste, puis enroles automatiquement l agent aupres du serveur.%n%nCliquez sur Suivant pour configurer le serveur.
+fr.FinishedHeadingLabel=Installation terminee
+fr.FinishedLabelNoIcons=L agent {#AppNameStr} tourne maintenant en arriere-plan. Vous pouvez fermer cette fenetre — l enrolement se finalisera au premier heartbeat (~30 s).
+fr.FinishedLabel=L agent {#AppNameStr} tourne maintenant en arriere-plan. Vous pouvez fermer cette fenetre — l enrolement se finalisera au premier heartbeat (~30 s).
+fr.ClickFinish=Cliquez sur Terminer pour quitter l installation.
+fr.ReadyMemoTasks=Actions a executer :
+fr.ReadyLabel1=Pret a installer {#AppNameStr}.
+fr.ReadyLabel2a=Cliquez sur Installer pour deposer les binaires, charger le driver et demarrer l agent.
+
+en.SetupAppTitle=Install {#AppNameStr}
+en.SetupWindowTitle=Install {#AppNameStr} — version {#AppVersion}
+en.WelcomeLabel1=Install the {#AppNameStr} agent
+en.WelcomeLabel2=This installer drops the kernel driver, the agent service and the wedr-plugin CLI on this host, then auto-enrolls the agent against the server.%n%nClick Next to configure the server.
+en.FinishedHeadingLabel=Installation complete
+en.FinishedLabelNoIcons=The {#AppNameStr} agent is now running in the background. You can close this window — enrollment will finalize on the first heartbeat (~30 s).
+en.FinishedLabel=The {#AppNameStr} agent is now running in the background. You can close this window — enrollment will finalize on the first heartbeat (~30 s).
+
+[CustomMessages]
+fr.ServerPageCaption=Configuration du serveur {#AppNameStr}
+fr.ServerPageDescription=Saisissez l URL du serveur {#AppNameStr} et le jeton d enrolement.
+fr.ServerPageHint=Ces valeurs sont ecrites dans %ProgramData%\WazabiEDR\agent.json. L agent s en sert au premier demarrage pour s auto-enroler.
+fr.ServerUrlLabel=URL du serveur :
+fr.ServerTokenLabel=Jeton d enrolement :
+fr.StatusInstalling=Deploiement du driver et configuration de l agent...
+
+en.ServerPageCaption={#AppNameStr} server configuration
+en.ServerPageDescription=Enter the URL of the {#AppNameStr} server and the enrollment token.
+en.ServerPageHint=These values are written to %ProgramData%\WazabiEDR\agent.json so the agent can auto-enroll on first start.
+en.ServerUrlLabel=Server URL:
+en.ServerTokenLabel=Enrollment token:
+en.StatusInstalling=Installing driver, configuring agent...
 
 [Files]
 ; Agent service binary.
@@ -88,7 +151,7 @@ Root: HKLM; Subkey: "SYSTEM\CurrentControlSet\Control\Session Manager\Environmen
 ; renvoyé par Inno.
 Filename: "powershell.exe"; \
   Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\scripts\install-all.ps1"" -PackageDir ""{tmp}\driver"" -AgentExe ""{app}\agent\WazabiEDR_Agent.exe"" -Server ""{code:GetServer}"" -Token ""{code:GetToken}"""; \
-  StatusMsg: "Installing driver, configuring agent..."; \
+  StatusMsg: "{cm:StatusInstalling}"; \
   Flags: runhidden waituntilterminated
 
 [UninstallRun]
@@ -128,11 +191,11 @@ end;
 procedure InitializeWizard;
 begin
   ServerPage := CreateInputQueryPage(wpWelcome,
-    'WazabiEDR server configuration',
-    'Enter the URL of the WazabiEDR server and the enrollment token.',
-    'These values are written to %ProgramData%\WazabiEDR\agent.json so the agent can auto-enroll on first start.');
-  ServerPage.Add('Server URL:', False);
-  ServerPage.Add('Enrollment token:', False);
+    ExpandConstant('{cm:ServerPageCaption}'),
+    ExpandConstant('{cm:ServerPageDescription}'),
+    ExpandConstant('{cm:ServerPageHint}'));
+  ServerPage.Add(ExpandConstant('{cm:ServerUrlLabel}'), False);
+  ServerPage.Add(ExpandConstant('{cm:ServerTokenLabel}'), True);
   ServerPage.Values[0] := CmdParam('SERVER', '');
   ServerPage.Values[1] := CmdParam('TOKEN', '');
 end;
