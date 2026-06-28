@@ -64,21 +64,29 @@ jobs:
           }
 
       # ---- Download sibling release assets --------------------------------
-      # Direct Invoke-WebRequest on the release-download URL — works on
-      # public repos without authentication, sidestepping the
-      # GITHUB_TOKEN cross-repo limitation (the workflow's automatic
-      # token is scoped to THIS repo only; trying `gh release download
-      # owner/OtherRepo` returns "Could not resolve to a Repository").
-      # Set GH_RELEASES_PAT if the sibling repos are ever made private.
+      # The sibling repos (Driver, Agent, Utils) are PRIVATE — the
+      # workflow's automatic GITHUB_TOKEN is scoped to THIS repo only
+      # and cannot read them. Required setup once :
+      #
+      #   1. Create a Fine-grained PAT scoped to the four sibling
+      #      repos with permission `Contents: Read`.
+      #   2. Add it as repo secret `GH_RELEASES_PAT` on
+      #      WazabiEDR_Installer.
+      #
+      # The fallback to GITHUB_TOKEN below is for the day the siblings
+      # ever go public — no PAT needed.
 
       - name: Download driver package
         shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GH_RELEASES_PAT || secrets.GITHUB_TOKEN }}
         run: |
           $tag    = '${{ steps.meta.outputs.tag }}'
           $owner  = '${{ github.repository_owner }}'
-          $url    = "https://github.com/$owner/WazabiEDR_Driver/releases/download/$tag/WazabiEDR_Driver.zip"
+          $repo   = "$owner/WazabiEDR_Driver"
           New-Item -ItemType Directory -Force -Path payload\driver | Out-Null
-          Invoke-WebRequest -Uri $url -OutFile payload\driver\WazabiEDR_Driver.zip -UseBasicParsing
+          gh release download $tag --repo $repo --pattern 'WazabiEDR_Driver.zip' --dir payload\driver
+          if ($LASTEXITCODE -ne 0) { throw "gh release download $repo $tag failed" }
           Expand-Archive -Path payload\driver\WazabiEDR_Driver.zip -DestinationPath payload\driver -Force
           Remove-Item payload\driver\WazabiEDR_Driver.zip
           Write-Host "Driver payload:"
@@ -86,14 +94,17 @@ jobs:
 
       - name: Download agent
         shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GH_RELEASES_PAT || secrets.GITHUB_TOKEN }}
         run: |
           $tag     = '${{ steps.meta.outputs.tag }}'
           $version = '${{ steps.meta.outputs.version }}'
           $owner   = '${{ github.repository_owner }}'
+          $repo    = "$owner/WazabiEDR_Agent"
           $asset   = "wazabi-agent-$version-windows-x86_64.zip"
-          $url     = "https://github.com/$owner/WazabiEDR_Agent/releases/download/$tag/$asset"
           New-Item -ItemType Directory -Force -Path payload\agent | Out-Null
-          Invoke-WebRequest -Uri $url -OutFile "payload\agent\$asset" -UseBasicParsing
+          gh release download $tag --repo $repo --pattern $asset --dir payload\agent
+          if ($LASTEXITCODE -ne 0) { throw "gh release download $repo $tag failed" }
           Expand-Archive -Path "payload\agent\$asset" -DestinationPath payload\agent -Force
           Remove-Item "payload\agent\$asset"
           if (-not (Test-Path 'payload\agent\WazabiEDR_Agent.exe')) {
@@ -102,14 +113,17 @@ jobs:
 
       - name: Download utils
         shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GH_RELEASES_PAT || secrets.GITHUB_TOKEN }}
         run: |
           $tag     = '${{ steps.meta.outputs.tag }}'
           $version = '${{ steps.meta.outputs.version }}'
           $owner   = '${{ github.repository_owner }}'
+          $repo    = "$owner/WazabiEDR_Utils"
           $asset   = "wazabi-utils-$version-windows-x86_64.zip"
-          $url     = "https://github.com/$owner/WazabiEDR_Utils/releases/download/$tag/$asset"
           New-Item -ItemType Directory -Force -Path payload\utils | Out-Null
-          Invoke-WebRequest -Uri $url -OutFile "payload\utils\$asset" -UseBasicParsing
+          gh release download $tag --repo $repo --pattern $asset --dir payload\utils
+          if ($LASTEXITCODE -ne 0) { throw "gh release download $repo $tag failed" }
           Expand-Archive -Path "payload\utils\$asset" -DestinationPath payload\utils -Force
           Remove-Item "payload\utils\$asset"
           if (-not (Test-Path 'payload\utils\wedr-plugin.exe')) {
