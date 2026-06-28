@@ -52,7 +52,7 @@ $ConfigDir   = Join-Path $env:ProgramData "WazabiEDR"
 $ConfigPath  = Join-Path $ConfigDir "agent.json"
 $SpoolDir    = Join-Path $ConfigDir "spool"
 $InstallRoot = Split-Path -Parent (Split-Path -Parent $AgentExe)  # {app}
-$FwRuleName  = "WazabiEDR Agent — Outbound"
+$FwRuleName  = "WazabiEDR Agent - Outbound"
 
 function Write-Step([string]$m) { Write-Host "[*] $m" -ForegroundColor Cyan }
 function Write-Ok  ([string]$m) { Write-Host "[+] $m" -ForegroundColor Green }
