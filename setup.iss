@@ -150,7 +150,7 @@ Root: HKLM; Subkey: "SYSTEM\CurrentControlSet\Control\Session Manager\Environmen
 ; le oneliner check ce marker après setup.exe, indépendamment du code
 ; renvoyé par Inno.
 Filename: "powershell.exe"; \
-  Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\scripts\install-all.ps1"" -PackageDir ""{tmp}\driver"" -AgentExe ""{app}\agent\WazabiEDR_Agent.exe"" -Server ""{code:GetServer}"" -Token ""{code:GetToken}"""; \
+  Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\scripts\install-all.ps1"" -PackageDir ""{tmp}\driver"" -AgentExe ""{app}\agent\WazabiEDR_Agent.exe"" -Server ""{code:GetServer}"" -Token ""{code:GetToken}"" {code:GetUpgradeFlag}"; \
   StatusMsg: "{cm:StatusInstalling}"; \
   Flags: runhidden waituntilterminated
 
@@ -218,6 +218,35 @@ begin
     Result := ServerPage.Values[0];
 end;
 
+// /UPGRADE est posé par la commande `update_agent` côté agent : on
+// overwrite les binaires SANS demander SERVER/TOKEN — l'`agent.json`
+// existant garde son agent_id + agent_token, donc l'enrolment n'a pas
+// besoin d'être rejoué. Sans ce flag, un silent install exige toujours
+// SERVER+TOKEN (cf. InitializeSetup plus bas).
+function IsUpgradeMode(): Boolean;
+var
+  i: Integer;
+begin
+  Result := False;
+  for i := 0 to ParamCount do
+    if CompareText(ParamStr(i), '/UPGRADE') = 0 then
+    begin
+      Result := True;
+      Exit;
+    end;
+end;
+
+// Passe `-UpgradeMode` à install-all.ps1 quand /UPGRADE est sur la
+// ligne de commande, chaîne vide sinon — évite d'avoir 2 variantes de
+// [Run] dans le setup.
+function GetUpgradeFlag(Param: String): String;
+begin
+  if IsUpgradeMode() then
+    Result := '-UpgradeMode'
+  else
+    Result := '';
+end;
+
 function GetToken(Param: String): String;
 begin
   if CmdParam('TOKEN', '') <> '' then
@@ -283,10 +312,11 @@ end;
 // Refuse to start a silent install without both /SERVER and /TOKEN.
 // The wizard wouldn't get a chance to show its input page, and the
 // agent would auto-enroll with empty values -- guaranteed 401.
+// Exception : /UPGRADE skip ce check (cas du `update_agent` à chaud).
 function InitializeSetup(): Boolean;
 begin
   Result := True;
-  if WizardSilent() then
+  if WizardSilent() and not IsUpgradeMode() then
   begin
     if (CmdParam('SERVER', '') = '') or (CmdParam('TOKEN', '') = '') then
     begin

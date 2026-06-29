@@ -48,7 +48,11 @@ param(
     [string]$AgentExe,
     [string]$Server,
     [string]$Token,
-    [switch]$ResumeFromState
+    [switch]$ResumeFromState,
+    # Mise a jour via `update_agent` cote agent : binaires overwrites,
+    # agent.json conserve, donc Server/Token ne sont pas exiges. Le
+    # service est arrete + redemarre par post-install.ps1.
+    [switch]$UpgradeMode
 )
 
 $ErrorActionPreference = "Continue"
@@ -84,9 +88,16 @@ if ($ResumeFromState) {
     $Token      = $state.Token
     Write-Host "[install-all] resume mode : PackageDir=$PackageDir Server=$Server" -ForegroundColor Cyan
 } else {
-    # Premier run normal : args obligatoires.
-    if (-not $PackageDir -or -not $AgentExe -or -not $Server -or -not $Token) {
-        Write-Host "[install-all] missing required args" -ForegroundColor Red
+    # Premier run normal : args obligatoires. En mode upgrade,
+    # Server/Token ne sont pas requis : l agent.json existant les
+    # contient deja, et post-install.ps1 ne reecrira pas le fichier.
+    if (-not $PackageDir -or -not $AgentExe) {
+        Write-Host "[install-all] missing required args (PackageDir/AgentExe)" -ForegroundColor Red
+        Stop-Transcript | Out-Null
+        exit 1
+    }
+    if (-not $UpgradeMode -and (-not $Server -or -not $Token)) {
+        Write-Host "[install-all] missing required args (Server/Token in fresh install mode)" -ForegroundColor Red
         Stop-Transcript | Out-Null
         exit 1
     }
